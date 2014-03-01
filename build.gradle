@@ -1,0 +1,19 @@
+apply plugin: 'java'
+
+repositories {
+    mavenCentral()
+    maven {
+        url 'https://github.com/psiegman/mvn-repo/raw/master/releases'
+    }
+}
+
+dependencies {
+    compile 'org.slf4j:slf4j-api:1.7.6'
+    compile 'org.apache.httpcomponents:httpclient:4.3.2'
+
+    compile('nl.siegmann.epublib:epublib-core:3.1') {
+        exclude module: 'slf4j-simple'
+    }
+
+    runtime 'org.slf4j:slf4j-simple:1.7.6'
+}
