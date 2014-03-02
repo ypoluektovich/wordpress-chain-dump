@@ -4,6 +4,8 @@ import nl.siegmann.epublib.domain.Author;
 import nl.siegmann.epublib.domain.Book;
 import nl.siegmann.epublib.domain.Resource;
 import nl.siegmann.epublib.epub.EpubWriter;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,11 +24,31 @@ public class MakeEpub {
 
 	public static void main(String[] args) throws IOException {
 		Book book = new Book();
-		log.info("Loading book info...");
-		Properties bookInfo = loadBookInfo();
-		book.getMetadata().addTitle(bookInfo.getProperty(PostChainDumper.PROP_TITLE));
-		book.getMetadata().addAuthor(new Author(bookInfo.getProperty("author", "(unknown author)")));
 
+		addBookInfo(book);
+
+		addChapters(book);
+
+		log.info("Writing book file");
+		try (BufferedOutputStream bookOut = new BufferedOutputStream(Files.newOutputStream(Paths.get(args[0])))) {
+			new EpubWriter().write(book, bookOut);
+		}
+	}
+
+	private static void addBookInfo(Book book) throws IOException {
+		log.info("Loading book info...");
+		JSONObject bookInfo = new JSONObject(new String(
+				Files.readAllBytes(Paths.get(PostChainDumper.BOOK_INFO_FILENAME)),
+				StandardCharsets.UTF_8
+		));
+		book.getMetadata().addTitle(bookInfo.getString(PostChainDumper.PROP_TITLE));
+		JSONArray authors = bookInfo.getJSONArray(PostChainDumper.PROP_AUTHOR);
+		for (int i = 0; i < authors.length(); ++i) {
+			book.getMetadata().addAuthor(new Author(authors.getString(i)));
+		}
+	}
+
+	private static void addChapters(Book book) throws IOException {
 		for (int index = 0; ; ++index) {
 			Path chapterInfoPath = Paths.get(PostChainDumper.getChapterInfoFileName(index));
 			if (Files.notExists(chapterInfoPath)) {
@@ -43,19 +65,6 @@ public class MakeEpub {
 			BufferedReader contentReader = Files.newBufferedReader(Paths.get(chapterContentFileName), StandardCharsets.UTF_8);
 			book.addSection(chapterInfo.getProperty(PostChainDumper.PROP_TITLE), new Resource(contentReader, chapterContentFileName));
 		}
-
-		log.info("Writing book file");
-		try (BufferedOutputStream bookOut = new BufferedOutputStream(Files.newOutputStream(Paths.get(args[0])))) {
-			new EpubWriter().write(book, bookOut);
-		}
-	}
-
-	private static Properties loadBookInfo() throws IOException {
-		Properties properties = new Properties();
-		try (BufferedReader reader = Files.newBufferedReader(Paths.get("book.info"), StandardCharsets.UTF_8)) {
-			properties.load(reader);
-		}
-		return properties;
 	}
 
 }

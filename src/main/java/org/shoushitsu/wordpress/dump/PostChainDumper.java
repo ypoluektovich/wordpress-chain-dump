@@ -4,6 +4,7 @@ import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ public class PostChainDumper {
 	public static final String BOOK_INFO_FILENAME = "book.info";
 	public static final String PROP_URL = "url";
 	public static final String PROP_TITLE = "title";
+	public static final String PROP_AUTHOR = "author";
 
 	private static final String NAV_LINK_SUBSTRING = "<a";
 	private static final Set<String> NAV_LINK_NEXT_MARKERS = new HashSet<>();
@@ -67,7 +69,7 @@ public class PostChainDumper {
 
 	private final AtomicInteger indexSource = new AtomicInteger();
 
-	private final Properties bookInfo = new Properties();
+	private final JSONObject bookInfo = new JSONObject();
 
 	private volatile boolean savedBookInfo;
 
@@ -137,7 +139,7 @@ public class PostChainDumper {
 	}
 
 	private void saveOriginalContent(int index, byte[] content) throws IOException {
-		String pathString = String.format("%06d.orig.html", index);
+		String pathString = String.format("%06d.orig", index);
 		log.debug("Saving uncleaned content to {}", pathString);
 		Files.write(Paths.get(pathString), content);
 	}
@@ -154,7 +156,23 @@ public class PostChainDumper {
 	private void processBookInfo(JSONObject json) {
 		String title = json.getJSONObject("meta").getJSONObject("data").getJSONObject("site").getString("name");
 		log.info("Book title: {}", title);
-		bookInfo.setProperty(PROP_TITLE, title);
+		bookInfo.put(PROP_TITLE, title);
+
+		addAuthor(json);
+	}
+
+	private void addAuthor(JSONObject json) {
+		String chapterAuthor = json.getJSONObject("author").getString("nice_name");
+		JSONArray authors = bookInfo.optJSONArray(PROP_AUTHOR);
+		if (authors == null) {
+			bookInfo.put(PROP_AUTHOR, authors = new JSONArray());
+		}
+		for (int i = 0; i < authors.length(); ++i) {
+			if (authors.getString(i).equals(chapterAuthor)) {
+				return;
+			}
+		}
+		authors.put(chapterAuthor);
 	}
 
 	private void processChapterInfo(JSONObject json) {
@@ -195,10 +213,10 @@ public class PostChainDumper {
 
 	private void saveCleanedContent(int index) throws IOException {
 		String fileName = BOOK_INFO_FILENAME;
-		if (!savedBookInfo && !bookInfo.isEmpty()) {
+		if (!savedBookInfo && bookInfo.has(PROP_TITLE)) {
 			log.debug("Writing book info to {}", fileName);
 			try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
-				bookInfo.store(out, null);
+				bookInfo.write(out);
 			}
 			savedBookInfo = true;
 		}
