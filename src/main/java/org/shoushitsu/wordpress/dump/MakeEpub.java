@@ -62,8 +62,9 @@ public class MakeEpub {
 				chapterInfo.load(chapterInfoReader);
 			}
 			String chapterContentFileName = PostChainDumper.getChapterContentFileName(index);
-			BufferedReader contentReader = Files.newBufferedReader(Paths.get(chapterContentFileName), StandardCharsets.UTF_8);
-			book.addSection(chapterInfo.getProperty(PostChainDumper.PROP_TITLE), new Resource(contentReader, chapterContentFileName));
+			try (BufferedReader contentReader = Files.newBufferedReader(Paths.get(chapterContentFileName), StandardCharsets.UTF_8)) {
+				book.addSection(chapterInfo.getProperty(PostChainDumper.PROP_TITLE), new Resource(contentReader, chapterContentFileName));
+			}
 		}
 	}
 
