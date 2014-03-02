@@ -13,7 +13,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.Set;
@@ -73,7 +75,13 @@ public class PostChainDumper {
 
 	private final AtomicInteger indexSource = new AtomicInteger();
 
-	private volatile boolean foundBookTitle;
+	private final Properties bookInfo = new Properties();
+
+	private volatile boolean savedBookInfo;
+
+	private final Properties chapterInfo = new Properties();
+
+	private final List<String> chapterLines = new ArrayList<>();
 
 	public PostChainDumper(CloseableHttpClient client, String loggerName) {
 		this.log = LoggerFactory.getLogger(loggerName);
@@ -102,7 +110,8 @@ public class PostChainDumper {
 		long startTime = System.currentTimeMillis();
 		byte[] content = fetchContent(thisUrl);
 		saveOriginalContent(index, content);
-		cleanUpAndSaveContent(thisUrl, index, content);
+		cleanUpContent(thisUrl, content);
+		saveCleanedContent(index);
 		log.info("Processed chapter #{} in {} ms total", index, System.currentTimeMillis() - startTime);
 	}
 
@@ -126,83 +135,55 @@ public class PostChainDumper {
 		Files.write(Paths.get(pathString), content);
 	}
 
-	private void cleanUpAndSaveContent(String thisUrl, int index, byte[] content) throws IOException {
-		String contentFileName = getChapterContentFileName(index);
-		log.debug("Writing cleaned content into {}", contentFileName);
-		try (BufferedWriter contentOut = Files.newBufferedWriter(Paths.get(contentFileName), StandardCharsets.UTF_8)) {
-			try (Scanner scanner = new Scanner(new ByteArrayInputStream(content), StandardCharsets.UTF_8.name())) {
-				scanner.useDelimiter(NEWLINE_PATTERN);
-				int state = BEFORE_ARTICLE;
+	private void cleanUpContent(String thisUrl, byte[] content) {
+		chapterInfo.clear();
+		chapterInfo.setProperty(PROP_URL, thisUrl);
 
-				while (scanner.hasNext()) {
-					String line = scanner.next();
-					switch (state) {
-						case BEFORE_ARTICLE:
-							if (!foundBookTitle && line.startsWith(BOOK_TITLE_PREFIX)) {
-								processBookTitle(line);
-							} else if (line.startsWith(TITLE_PREFIX)) {
-								String title = processChapterTitle(thisUrl, index, line);
-								contentOut.write("<h1>");
-								contentOut.write(title);
-								contentOut.write("</h1>");
-								contentOut.newLine();
-							} else if (CONTENT_START_PATTERN.matcher(line).find()) {
-								state = INSIDE_ARTICLE;
-							}
-							break;
-						case INSIDE_ARTICLE:
-							if (line.contains("id=\"jp-post-flair\"")) {
-								state = AFTER_ARTICLE;
-							} else {
-								processLineInArticle(line, contentOut);
-							}
-							break;
-						default:
-							throw new IllegalStateException(Integer.toString(state));
-					}
-					if (state == AFTER_ARTICLE) {
+		chapterLines.clear();
+
+		try (Scanner scanner = new Scanner(new ByteArrayInputStream(content), StandardCharsets.UTF_8.name())) {
+			scanner.useDelimiter(NEWLINE_PATTERN);
+			int state = BEFORE_ARTICLE;
+
+			while (scanner.hasNext()) {
+				String line = scanner.next();
+				switch (state) {
+					case BEFORE_ARTICLE:
+						if (!savedBookInfo && line.startsWith(BOOK_TITLE_PREFIX)) {
+							processBookTitle(line);
+						} else if (line.startsWith(TITLE_PREFIX)) {
+							processChapterTitle(line);
+						} else if (CONTENT_START_PATTERN.matcher(line).find()) {
+							state = INSIDE_ARTICLE;
+						}
 						break;
-					}
+					case INSIDE_ARTICLE:
+						if (line.contains("id=\"jp-post-flair\"")) {
+							state = AFTER_ARTICLE;
+						} else {
+							processLineInArticle(line);
+						}
+						break;
+					default:
+						throw new IllegalStateException(Integer.toString(state));
+				}
+				if (state == AFTER_ARTICLE) {
+					break;
 				}
 			}
 		}
 	}
 
-	public static String getChapterContentFileName(int index) {
-		return String.format("%06d.html", index);
-	}
-
-	private void processBookTitle(String line) throws IOException {
+	private void processBookTitle(String line) {
 		String title = parseMetaPropertyValue(line, BOOK_TITLE_PREFIX.length());
 		log.info("Book title: {}", title);
-		Properties properties = new Properties();
-		properties.setProperty(PROP_TITLE, title);
-		try (BufferedWriter infoOut = Files.newBufferedWriter(
-				Paths.get(BOOK_INFO_FILENAME),
-				StandardCharsets.UTF_8
-		)) {
-			properties.store(infoOut, null);
-		}
-		foundBookTitle = true;
+		bookInfo.setProperty(PROP_TITLE, title);
 	}
 
-	private String processChapterTitle(String thisUrl, int index, String line) throws IOException {
+	private void processChapterTitle(String line) {
 		String title = parseMetaPropertyValue(line, TITLE_PREFIX.length());
 		log.info("Chapter title: {}", title);
-		Properties properties = new Properties();
-		properties.setProperty(PROP_URL, thisUrl);
-		properties.setProperty(PROP_TITLE, title);
-		try (BufferedWriter infoOut = Files.newBufferedWriter(
-				Paths.get(getChapterInfoFileName(index)),
-				StandardCharsets.UTF_8
-		)) {
-			properties.store(infoOut, null);
-		}
-		return title;
-	}
-
-	public static String getChapterInfoFileName(int index) {
-		return String.format("%06d.info", index);
+		chapterInfo.setProperty(PROP_TITLE, title);
 	}
 
 	private static String parseMetaPropertyValue(String line, int offset) {
@@ -211,7 +192,7 @@ public class PostChainDumper {
 		return line.substring(titleStart, titleEnd);
 	}
 
-	private void processLineInArticle(String line, BufferedWriter contentOut) throws IOException {
+	private void processLineInArticle(String line) {
 		boolean navigationLine = false;
 		if (line.contains(NAV_LINK_SUBSTRING)) {
 			Matcher matcher = NAV_LINK_PATTERN.matcher(line);
@@ -227,9 +208,59 @@ public class PostChainDumper {
 			}
 		}
 		if (!navigationLine) {
-			contentOut.write(line);
-			contentOut.newLine();
+			chapterLines.add(line);
 		}
+	}
+
+	private void saveCleanedContent(int index) throws IOException {
+		String fileName = BOOK_INFO_FILENAME;
+		if (!savedBookInfo && !bookInfo.isEmpty()) {
+			log.debug("Writing book info to {}", fileName);
+			try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
+				bookInfo.store(out, null);
+			}
+			savedBookInfo = true;
+		}
+
+		fileName = getChapterInfoFileName(index);
+		log.debug("Writing chapter info to {}", fileName);
+		try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
+			chapterInfo.store(out, null);
+		}
+
+		fileName = getChapterContentFileName(index);
+		log.debug("Writing cleaned content into {}", fileName);
+		try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
+			writeln(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+			writeln(out, "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">");
+			writeln(out, "<html xmlns=\"http://www.w3.org/1999/xhtml\">");
+
+			writeln(out, "<head>");
+			writeln(out, "<title>" + chapterInfo.getProperty(PROP_TITLE) + "</title>");
+			writeln(out, "</head>");
+
+			writeln(out, "<body>");
+			writeln(out, "<h1>" + chapterInfo.getProperty(PROP_TITLE) + "</h1>");
+			for (String line : chapterLines) {
+				writeln(out, line);
+			}
+			writeln(out, "</body>");
+
+			writeln(out, "</html>");
+		}
+	}
+
+	public static String getChapterInfoFileName(int index) {
+		return String.format("%06d.info", index);
+	}
+
+	public static String getChapterContentFileName(int index) {
+		return String.format("%06d.html", index);
+	}
+
+	private static void writeln(BufferedWriter out, String line) throws IOException {
+		out.write(line);
+		out.newLine();
 	}
 
 }
