@@ -4,24 +4,14 @@ import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
-import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.StringReader;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,12 +23,9 @@ import java.util.regex.Pattern;
 
 public class PostChainDumper {
 
-	private static final int INDEX_PLACEHOLDER = -1;
+	private static final int INDEX_PLACEHOLDER = 0;
 
 	public static final String BOOK_INFO_FILENAME = "book.info";
-	public static final String PROP_URL = "url";
-	public static final String PROP_TITLE = "title";
-	public static final String PROP_AUTHOR = "author";
 
 	private static final String NAV_LINK_SUBSTRING = "<a";
 	private static final Set<String> NAV_LINK_NEXT_MARKERS = new HashSet<>();
@@ -58,10 +45,18 @@ public class PostChainDumper {
 		NAV_LINK_MARKER_GROUP = 2;
 	}
 
+	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) throws IOException {
+		PostChainDumper dumper = new PostChainDumper(client, callback);
+		dumper.enqueue(firstUrl);
+		dumper.run();
+	}
 
-	private final Logger log;
 
 	private final CloseableHttpClient client;
+
+	private final PostChainDumperCallback callback;
+
+	private final Logger log;
 
 	private final BlockingQueue<String> urlQueue = new LinkedBlockingQueue<>();
 
@@ -69,50 +64,56 @@ public class PostChainDumper {
 
 	private final AtomicInteger indexSource = new AtomicInteger();
 
-	private final JSONObject bookInfo = new JSONObject();
-
 	private volatile boolean savedBookInfo;
 
-	private final Properties chapterInfo = new Properties();
+	private final Set<String> knownAuthors = new HashSet<>();
 
-	private final List<String> chapterLines = new ArrayList<>();
-
-	public PostChainDumper(CloseableHttpClient client, String loggerName) {
-		this.log = LoggerFactory.getLogger(loggerName);
+	private PostChainDumper(CloseableHttpClient client, PostChainDumperCallback callback) {
 		this.client = client;
+		this.callback = callback;
+		this.log = callback.getLogger();
 	}
 
-
-	public void enqueue(String url) {
+	private void enqueue(String url) {
 		if (indexByUrl.putIfAbsent(url, INDEX_PLACEHOLDER) == null) {
 			log.trace("Enqueueing url: {}", url);
-			indexByUrl.put(url, indexSource.getAndIncrement());
+			indexByUrl.put(url, indexSource.incrementAndGet());
 			urlQueue.offer(url);
 		}
 	}
 
-
-	public void run() throws IOException {
+	private void run() throws IOException {
 		String url;
 		while ((url = urlQueue.poll()) != null) {
 			processNode(url, indexByUrl.get(url));
 		}
 	}
 
-	private void processNode(String url, int index) throws IOException {
+	private boolean processNode(String url, int index) {
 		log.info("Processing url with index {}: {}", index, url);
+		callback.startChapter(index);
+
 		WordpressUrlParser.SiteAndSlug siteAndSlug = WordpressUrlParser.parsePostUrl(url);
 		if (siteAndSlug == null) {
 			log.error("Can't parse URL: {}", url);
-			return;
+			return callback.badUrl(index, url);
 		}
 		log.debug("Parsed url as: {}", siteAndSlug);
 		long startTime = System.currentTimeMillis();
-		byte[] content = fetchContent(siteAndSlug);
-		saveOriginalContent(index, content);
+		byte[] content;
+		try {
+			content = fetchContent(siteAndSlug);
+		} catch (IOException e) {
+			// todo: try several times
+			callback.fetchException(e);
+			return false;
+		}
+		callback.saveUnparsedPost(index, content);
 		cleanUpContent(content);
-		saveCleanedContent(index);
+
 		log.info("Processed chapter #{} in {} ms total", index, System.currentTimeMillis() - startTime);
+		callback.endChapter(index);
+		return true;
 	}
 
 	private byte[] fetchContent(WordpressUrlParser.SiteAndSlug siteAndSlug) throws IOException {
@@ -124,7 +125,7 @@ public class PostChainDumper {
 			try {
 				request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
 			} catch (URISyntaxException e) {
-				log.error("Impossible!", e);
+				logImpossibleException(e);
 				savedBookInfo = true;
 			}
 		}
@@ -136,12 +137,6 @@ public class PostChainDumper {
 		}
 		log.info("Fetched {} bytes in {} ms", content.length, System.currentTimeMillis() - startTime);
 		return content;
-	}
-
-	private void saveOriginalContent(int index, byte[] content) throws IOException {
-		String pathString = String.format("%06d.orig", index);
-		log.debug("Saving uncleaned content to {}", pathString);
-		Files.write(Paths.get(pathString), content);
 	}
 
 	private void cleanUpContent(byte[] content) {
@@ -156,110 +151,47 @@ public class PostChainDumper {
 	private void processBookInfo(JSONObject json) {
 		String title = json.getJSONObject("meta").getJSONObject("data").getJSONObject("site").getString("name");
 		log.info("Book title: {}", title);
-		bookInfo.put(PROP_TITLE, title);
-
-		addAuthor(json);
-	}
-
-	private void addAuthor(JSONObject json) {
-		String chapterAuthor = json.getJSONObject("author").getString("nice_name");
-		JSONArray authors = bookInfo.optJSONArray(PROP_AUTHOR);
-		if (authors == null) {
-			bookInfo.put(PROP_AUTHOR, authors = new JSONArray());
-		}
-		for (int i = 0; i < authors.length(); ++i) {
-			if (authors.getString(i).equals(chapterAuthor)) {
-				return;
-			}
-		}
-		authors.put(chapterAuthor);
+		callback.bookTitle(title);
+		savedBookInfo = true;
 	}
 
 	private void processChapterInfo(JSONObject json) {
-		chapterInfo.clear();
-		chapterInfo.setProperty(PROP_URL, json.getString("URL"));
 		String title = json.getString("title");
 		log.info("Chapter title: {}", title);
-		chapterInfo.setProperty(PROP_TITLE, title);
+		callback.chapterTitle(title);
+
+		String author = json.getJSONObject("author").getString("nice_name");
+		if (!knownAuthors.contains(author)) {
+			knownAuthors.add(author);
+			callback.author(author);
+		}
 	}
 
 	private void processChapterContent(JSONObject json) {
-		chapterLines.clear();
-		try (BufferedReader contentReader = new BufferedReader(new StringReader(json.getString("content")))) {
-			String line;
-			while ((line = contentReader.readLine()) != null) {
-				boolean navigationLine = false;
-				if (line.contains(NAV_LINK_SUBSTRING)) {
-					Matcher matcher = NAV_LINK_PATTERN.matcher(line);
-					while (matcher.find()) {
-						navigationLine = true;
-						String linkMarker = matcher.group(NAV_LINK_MARKER_GROUP);
-						log.trace("Found navigation link with marker {}", linkMarker);
-						if (NAV_LINK_NEXT_MARKERS.contains(linkMarker)) {
-							String url = matcher.group(NAV_LINK_URL_GROUP);
-							log.debug("Link to next chapter: {}", url);
-							enqueue(url);
-						}
+		for (String line : json.getString("content").split("\n")) {
+			boolean navigationLine = false;
+			if (line.contains(NAV_LINK_SUBSTRING)) {
+				Matcher matcher = NAV_LINK_PATTERN.matcher(line);
+				while (matcher.find()) {
+					navigationLine = true;
+					String linkMarker = matcher.group(NAV_LINK_MARKER_GROUP);
+					log.trace("Found navigation link with marker {}", linkMarker);
+					if (NAV_LINK_NEXT_MARKERS.contains(linkMarker)) {
+						String url = matcher.group(NAV_LINK_URL_GROUP);
+						log.debug("Link to next chapter: {}", url);
+						enqueue(url);
 					}
 				}
-				if (!navigationLine) {
-					chapterLines.add(line);
-				}
 			}
-		} catch (IOException e) {
-			log.error("Impossible!", e);
-		}
-	}
-
-	private void saveCleanedContent(int index) throws IOException {
-		String fileName = BOOK_INFO_FILENAME;
-		if (!savedBookInfo && bookInfo.has(PROP_TITLE)) {
-			log.debug("Writing book info to {}", fileName);
-			try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
-				bookInfo.write(out);
+			if (!navigationLine) {
+				callback.chapterLine(line);
 			}
-			savedBookInfo = true;
-		}
-
-		fileName = getChapterInfoFileName(index);
-		log.debug("Writing chapter info to {}", fileName);
-		try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
-			chapterInfo.store(out, null);
-		}
-
-		fileName = getChapterContentFileName(index);
-		log.debug("Writing cleaned content into {}", fileName);
-		try (BufferedWriter out = Files.newBufferedWriter(Paths.get(fileName), StandardCharsets.UTF_8)) {
-			writeln(out, "<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-			writeln(out, "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">");
-			writeln(out, "<html xmlns=\"http://www.w3.org/1999/xhtml\">");
-
-			writeln(out, "<head>");
-			writeln(out, "<title>" + chapterInfo.getProperty(PROP_TITLE) + "</title>");
-			writeln(out, "</head>");
-
-			writeln(out, "<body>");
-			writeln(out, "<h1>" + chapterInfo.getProperty(PROP_TITLE) + "</h1>");
-			for (String line : chapterLines) {
-				writeln(out, line);
-			}
-			writeln(out, "</body>");
-
-			writeln(out, "</html>");
 		}
 	}
 
-	public static String getChapterInfoFileName(int index) {
-		return String.format("%06d.info", index);
-	}
-
-	public static String getChapterContentFileName(int index) {
-		return String.format("%06d.html", index);
-	}
-
-	private static void writeln(BufferedWriter out, String line) throws IOException {
-		out.write(line);
-		out.newLine();
+	private void logImpossibleException(Exception e) {
+		log.error("Impossible!", e);
+		callback.impossible();
 	}
 
 }
