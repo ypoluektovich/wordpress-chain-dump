@@ -16,5 +16,7 @@ dependencies {
         exclude module: 'slf4j-simple'
     }
 
+    compile 'org.simpleframework:simple:5.1.6'
+
     runtime 'org.slf4j:slf4j-simple:1.7.6'
 }
