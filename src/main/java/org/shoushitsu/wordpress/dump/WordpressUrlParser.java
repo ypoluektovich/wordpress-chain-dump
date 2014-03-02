@@ -13,7 +13,7 @@ public class WordpressUrlParser {
 		return new SiteAndSlug(matcher.group(POST_URL_SITE_GROUP), matcher.group(POST_URL_SLUG_GROUP));
 	}
 
-	private static final Pattern POST_URL_PATTERN = Pattern.compile("(?:http://)?([-\\w]+?.wordpress.com)/\\d{4}/\\d{2}/\\d{2}/(.+)/?");
+	private static final Pattern POST_URL_PATTERN = Pattern.compile("(?:http://)?([-\\w]+?.wordpress.com)/\\d{4}/\\d{2}/\\d{2}/([^/]+)/?");
 
 	private static final int POST_URL_SITE_GROUP = 1;
 

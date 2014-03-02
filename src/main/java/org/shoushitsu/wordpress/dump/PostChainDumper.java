@@ -1,7 +1,9 @@
 package org.shoushitsu.wordpress.dump;
 
+import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.json.JSONObject;
@@ -100,7 +102,7 @@ public class PostChainDumper {
 		long startTime = System.currentTimeMillis();
 		byte[] content;
 		try {
-			content = fetchContent(siteAndSlug);
+			content = fetchContent(siteAndSlug, url);
 		} catch (IOException e) {
 			// todo: try several times
 			callback.fetchException(e);
@@ -114,24 +116,53 @@ public class PostChainDumper {
 		return true;
 	}
 
-	private byte[] fetchContent(WordpressUrlParser.SiteAndSlug siteAndSlug) throws IOException {
+	private byte[] fetchContent(WordpressUrlParser.SiteAndSlug siteAndSlug, String url) throws IOException {
 		log.debug("Fetching content");
 		long startTime = System.currentTimeMillis();
 		byte[] content;
-		HttpGet request = new HttpGet(WordpressApiUrlBuilder.getPostBySiteAndSlug(siteAndSlug.site, siteAndSlug.slug));
-		if (!savedBookInfo) {
-			try {
-				request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
-			} catch (URISyntaxException e) {
-				logImpossibleException(e);
-				savedBookInfo = true;
+		while (true) {
+			HttpGet request = new HttpGet(WordpressApiUrlBuilder.getPostBySiteAndSlug(siteAndSlug.site, siteAndSlug.slug));
+			if (!savedBookInfo) {
+				try {
+					request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
+				} catch (URISyntaxException e) {
+					logImpossibleException(e);
+					savedBookInfo = true;
+				}
 			}
-		}
-		try (CloseableHttpResponse response = client.execute(request)) {
-			long contentLength = response.getEntity().getContentLength();
-			ByteArrayOutputStream baos = new ByteArrayOutputStream(contentLength < 0 ? (1 << 15) : (int) contentLength);
-			response.getEntity().writeTo(baos);
-			content = baos.toByteArray();
+			int statusCode;
+			try (CloseableHttpResponse response = client.execute(request)) {
+				statusCode = response.getStatusLine().getStatusCode();
+				if (statusCode == 200) {
+					long contentLength = response.getEntity().getContentLength();
+					ByteArrayOutputStream baos = new ByteArrayOutputStream(contentLength < 0 ? (1 << 15) : (int) contentLength);
+					response.getEntity().writeTo(baos);
+					content = baos.toByteArray();
+					break;
+				}
+			}
+			log.debug("Status code {} is not 200! Attempting to follow redirect...", statusCode);
+			if (statusCode == 404) {
+				try (CloseableHttpResponse head = client.execute(
+						RequestBuilder.head()
+								.setUri(url)
+								.setConfig(
+										RequestConfig.copy(RequestConfig.DEFAULT)
+												.setRedirectsEnabled(false)
+												.build()
+								)
+								.build()
+				)) {
+					statusCode = head.getStatusLine().getStatusCode();
+					log.debug("HEAD returned code: {}", statusCode);
+					if (statusCode == 301) {
+						url = head.getFirstHeader("Location").getValue();
+						siteAndSlug = WordpressUrlParser.parsePostUrl(url);
+						continue;
+					}
+				}
+			}
+			throw new IOException("couldn't find a post at location " + url);
 		}
 		log.info("Fetched {} bytes in {} ms", content.length, System.currentTimeMillis() - startTime);
 		return content;
