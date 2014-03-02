@@ -25,8 +25,6 @@ public class PostChainDumper {
 
 	private static final int INDEX_PLACEHOLDER = 0;
 
-	public static final String BOOK_INFO_FILENAME = "book.info";
-
 	private static final String NAV_LINK_SUBSTRING = "<a";
 	private static final Set<String> NAV_LINK_NEXT_MARKERS = new HashSet<>();
 	private static final Pattern NAV_LINK_PATTERN;
