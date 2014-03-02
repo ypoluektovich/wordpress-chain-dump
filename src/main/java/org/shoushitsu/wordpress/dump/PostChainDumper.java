@@ -2,14 +2,18 @@ package org.shoushitsu.wordpress.dump;
 
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.StringReader;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -17,7 +21,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
-import java.util.Scanner;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,20 +34,9 @@ public class PostChainDumper {
 
 	private static final int INDEX_PLACEHOLDER = -1;
 
-	private static final Pattern NEWLINE_PATTERN = Pattern.compile("\n");
-
-	private static final int BEFORE_ARTICLE = 0;
-	private static final int INSIDE_ARTICLE = 1;
-	private static final int AFTER_ARTICLE = 2;
-
-	private static final String BOOK_TITLE_PREFIX = "<meta property=\"og:site_name\"";
-	private static final String TITLE_PREFIX = "<meta property=\"og:title\"";
-
 	public static final String BOOK_INFO_FILENAME = "book.info";
 	public static final String PROP_URL = "url";
 	public static final String PROP_TITLE = "title";
-
-	private static final Pattern CONTENT_START_PATTERN = Pattern.compile("class=\"(?:entry-)?content\"");
 
 	private static final String NAV_LINK_SUBSTRING = "<a";
 	private static final Set<String> NAV_LINK_NEXT_MARKERS = new HashSet<>();
@@ -105,23 +97,38 @@ public class PostChainDumper {
 		}
 	}
 
-	private void processNode(String thisUrl, int index) throws IOException {
-		log.info("Processing url with index {}: {}", index, thisUrl);
+	private void processNode(String url, int index) throws IOException {
+		log.info("Processing url with index {}: {}", index, url);
+		WordpressUrlParser.SiteAndSlug siteAndSlug = WordpressUrlParser.parsePostUrl(url);
+		if (siteAndSlug == null) {
+			log.error("Can't parse URL: {}", url);
+			return;
+		}
+		log.debug("Parsed url as: {}", siteAndSlug);
 		long startTime = System.currentTimeMillis();
-		byte[] content = fetchContent(thisUrl);
+		byte[] content = fetchContent(siteAndSlug);
 		saveOriginalContent(index, content);
-		cleanUpContent(thisUrl, content);
+		cleanUpContent(content);
 		saveCleanedContent(index);
 		log.info("Processed chapter #{} in {} ms total", index, System.currentTimeMillis() - startTime);
 	}
 
-	private byte[] fetchContent(String url) throws IOException {
+	private byte[] fetchContent(WordpressUrlParser.SiteAndSlug siteAndSlug) throws IOException {
 		log.debug("Fetching content");
 		long startTime = System.currentTimeMillis();
 		byte[] content;
-		try (CloseableHttpResponse response = client.execute(new HttpGet(url))) {
+		HttpGet request = new HttpGet(WordpressApiUrlBuilder.getPostBySiteAndSlug(siteAndSlug.site, siteAndSlug.slug));
+		if (!savedBookInfo) {
+			try {
+				request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
+			} catch (URISyntaxException e) {
+				log.error("Impossible!", e);
+				savedBookInfo = true;
+			}
+		}
+		try (CloseableHttpResponse response = client.execute(request)) {
 			long contentLength = response.getEntity().getContentLength();
-			ByteArrayOutputStream baos = new ByteArrayOutputStream(contentLength < 0 ? 8192 : (int) contentLength);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream(contentLength < 0 ? (1 << 15) : (int) contentLength);
 			response.getEntity().writeTo(baos);
 			content = baos.toByteArray();
 		}
@@ -135,80 +142,54 @@ public class PostChainDumper {
 		Files.write(Paths.get(pathString), content);
 	}
 
-	private void cleanUpContent(String thisUrl, byte[] content) {
-		chapterInfo.clear();
-		chapterInfo.setProperty(PROP_URL, thisUrl);
-
-		chapterLines.clear();
-
-		try (Scanner scanner = new Scanner(new ByteArrayInputStream(content), StandardCharsets.UTF_8.name())) {
-			scanner.useDelimiter(NEWLINE_PATTERN);
-			int state = BEFORE_ARTICLE;
-
-			while (scanner.hasNext()) {
-				String line = scanner.next();
-				switch (state) {
-					case BEFORE_ARTICLE:
-						if (!savedBookInfo && line.startsWith(BOOK_TITLE_PREFIX)) {
-							processBookTitle(line);
-						} else if (line.startsWith(TITLE_PREFIX)) {
-							processChapterTitle(line);
-						} else if (CONTENT_START_PATTERN.matcher(line).find()) {
-							state = INSIDE_ARTICLE;
-						}
-						break;
-					case INSIDE_ARTICLE:
-						if (line.contains("id=\"jp-post-flair\"")) {
-							state = AFTER_ARTICLE;
-						} else {
-							processLineInArticle(line);
-						}
-						break;
-					default:
-						throw new IllegalStateException(Integer.toString(state));
-				}
-				if (state == AFTER_ARTICLE) {
-					break;
-				}
-			}
+	private void cleanUpContent(byte[] content) {
+		JSONObject json = new JSONObject(new String(content, StandardCharsets.UTF_8));
+		if (!savedBookInfo) {
+			processBookInfo(json);
 		}
+		processChapterInfo(json);
+		processChapterContent(json);
 	}
 
-	private void processBookTitle(String line) {
-		String title = parseMetaPropertyValue(line, BOOK_TITLE_PREFIX.length());
+	private void processBookInfo(JSONObject json) {
+		String title = json.getJSONObject("meta").getJSONObject("data").getJSONObject("site").getString("name");
 		log.info("Book title: {}", title);
 		bookInfo.setProperty(PROP_TITLE, title);
 	}
 
-	private void processChapterTitle(String line) {
-		String title = parseMetaPropertyValue(line, TITLE_PREFIX.length());
+	private void processChapterInfo(JSONObject json) {
+		chapterInfo.clear();
+		chapterInfo.setProperty(PROP_URL, json.getString("URL"));
+		String title = json.getString("title");
 		log.info("Chapter title: {}", title);
 		chapterInfo.setProperty(PROP_TITLE, title);
 	}
 
-	private static String parseMetaPropertyValue(String line, int offset) {
-		int titleStart = line.indexOf('"', offset) + 1;
-		int titleEnd = line.lastIndexOf('"');
-		return line.substring(titleStart, titleEnd);
-	}
-
-	private void processLineInArticle(String line) {
-		boolean navigationLine = false;
-		if (line.contains(NAV_LINK_SUBSTRING)) {
-			Matcher matcher = NAV_LINK_PATTERN.matcher(line);
-			while (matcher.find()) {
-				navigationLine = true;
-				String linkMarker = matcher.group(NAV_LINK_MARKER_GROUP);
-				log.trace("Found navigation link with marker {}", linkMarker);
-				if (NAV_LINK_NEXT_MARKERS.contains(linkMarker)) {
-					String url = matcher.group(NAV_LINK_URL_GROUP);
-					log.debug("Link to next chapter: {}", url);
-					enqueue(url);
+	private void processChapterContent(JSONObject json) {
+		chapterLines.clear();
+		try (BufferedReader contentReader = new BufferedReader(new StringReader(json.getString("content")))) {
+			String line;
+			while ((line = contentReader.readLine()) != null) {
+				boolean navigationLine = false;
+				if (line.contains(NAV_LINK_SUBSTRING)) {
+					Matcher matcher = NAV_LINK_PATTERN.matcher(line);
+					while (matcher.find()) {
+						navigationLine = true;
+						String linkMarker = matcher.group(NAV_LINK_MARKER_GROUP);
+						log.trace("Found navigation link with marker {}", linkMarker);
+						if (NAV_LINK_NEXT_MARKERS.contains(linkMarker)) {
+							String url = matcher.group(NAV_LINK_URL_GROUP);
+							log.debug("Link to next chapter: {}", url);
+							enqueue(url);
+						}
+					}
+				}
+				if (!navigationLine) {
+					chapterLines.add(line);
 				}
 			}
-		}
-		if (!navigationLine) {
-			chapterLines.add(line);
+		} catch (IOException e) {
+			log.error("Impossible!", e);
 		}
 	}
 
