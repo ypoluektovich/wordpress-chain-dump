@@ -18,6 +18,7 @@ public class Main {
 			System.err.println("Arguments: <port to listen on>");
 			return;
 		}
+		int port = Integer.parseInt(args[0]);
 
 		RequestHandler handler = new RequestHandler();
 
@@ -25,14 +26,14 @@ public class Main {
 		try {
 			ContainerServer server = new ContainerServer(handler);
 			connection = new SocketConnection(server);
-			connection.connect(new InetSocketAddress(Integer.parseInt(args[0])));
+			connection.connect(new InetSocketAddress(port));
 		} catch (IOException e) {
 			log.error("Failed to start the server", e);
 			System.exit(1);
 			return;
 		}
 
-		log.info("Started the server");
+		log.info("Started the server on port {}", port);
 
 		try {
 			handler.awaitShutdown();
