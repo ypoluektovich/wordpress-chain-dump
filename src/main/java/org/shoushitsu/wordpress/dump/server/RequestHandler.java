@@ -16,15 +16,37 @@ import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 
 class RequestHandler implements Container {
 
 	private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
 
-	private static final JSONObject OK = new JSONObject(Collections.singletonMap("status", "ok"));
+	private static final JSONObject OK = makeOkResponse();
+
+	private static JSONObject makeOkResponse() {
+		return new JSONObject(Collections.singletonMap("status", "ok"));
+	}
+
 	private static final JSONObject WHAT = new JSONObject(Collections.singletonMap("status", "what"));
 
+	private static final String P_URL = "url";
+	private static final JSONObject MISSING_URL;
+	static {
+		MISSING_URL = new JSONObject();
+		MISSING_URL.put("status", "missing_param");
+		MISSING_URL.put("params", Arrays.asList(P_URL));
+	}
+
 	private final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+	private final ConcurrentMap<String, DumpTask> taskByUrl = new ConcurrentHashMap<>();
+
+	private final ExecutorService executor;
+
+	RequestHandler(ExecutorService executor) {
+		this.executor = executor;
+	}
 
 	void awaitShutdown() throws InterruptedException {
 		shutdownLatch.await();
@@ -52,9 +74,38 @@ class RequestHandler implements Container {
 				log.info("Server stop command received");
 				shutdownLatch.countDown();
 				return OK;
+			case "/dump":
+				String url = req.getParameter(P_URL);
+				if (url == null) {
+					log.info("Bad request: missing parameter: url");
+					return MISSING_URL;
+				}
+				url = url.trim();
+				log.info("Asked to dump URL: {}", url);
+
+				DumpTask newTask = new DumpTask(url, new MyDumpTaskCallback());
+				DumpTask registeredTask = taskByUrl.putIfAbsent(url, newTask);
+				if (registeredTask == null) {
+					log.info("Scheduling new dump task");
+					registeredTask = newTask;
+					executor.execute(registeredTask);
+				}
+
+				JSONObject statusAsJson = registeredTask.getStatusAsJson();
+				log.info("Returning status: {}", statusAsJson);
+				JSONObject resp = makeOkResponse();
+				resp.put("task", statusAsJson);
+				return resp;
 			default:
 				log.info("Unsupported request");
 				return WHAT;
+		}
+	}
+
+	private class MyDumpTaskCallback implements DumpTask.Callback {
+		@Override
+		public void failed(DumpTask task) {
+			taskByUrl.remove(task.getUrl(), task);
 		}
 	}
 

@@ -8,6 +8,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Main {
 
@@ -20,7 +22,8 @@ public class Main {
 		}
 		int port = Integer.parseInt(args[0]);
 
-		RequestHandler handler = new RequestHandler();
+		ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+		RequestHandler handler = new RequestHandler(executor);
 
 		Connection connection;
 		try {
@@ -42,13 +45,15 @@ public class Main {
 			return;
 		}
 
-		log.warn("Stopping the server");
+		log.warn("Stopping the HTTP server");
 		try {
 			connection.close();
 		} catch (IOException e) {
 			log.error("Error while shutting the server down", e);
 		}
-		log.info("Sayonara");
+
+		log.warn("Stopping the executor service");
+		executor.shutdownNow();
 	}
 
 }
