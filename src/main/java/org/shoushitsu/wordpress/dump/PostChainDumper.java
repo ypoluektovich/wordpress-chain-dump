@@ -85,7 +85,9 @@ public class PostChainDumper {
 	private void run() throws IOException {
 		String url;
 		while ((url = urlQueue.poll()) != null) {
-			processNode(url, indexByUrl.get(url));
+			if (!processNode(url, indexByUrl.get(url))) {
+				break;
+			}
 		}
 	}
 
@@ -125,7 +127,7 @@ public class PostChainDumper {
 				try {
 					Thread.sleep(attempt * 1000);
 				} catch (InterruptedException e) {
-					log.info("Wait was interrupted!", e);
+					log.info("Wait was interrupted!");
 					return false;
 				}
 			}
@@ -148,7 +150,8 @@ public class PostChainDumper {
 				try {
 					request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
 				} catch (URISyntaxException e) {
-					logImpossibleException(e);
+					log.error("Impossible!", e);
+					callback.impossible();
 					savedBookInfo = true;
 				}
 			}
@@ -244,11 +247,6 @@ public class PostChainDumper {
 				callback.chapterLine(line);
 			}
 		}
-	}
-
-	private void logImpossibleException(Exception e) {
-		log.error("Impossible!", e);
-		callback.impossible();
 	}
 
 }
