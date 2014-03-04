@@ -10,7 +10,7 @@ import java.io.StringReader;
 
 abstract class EpubDumperCallback implements PostChainDumperCallback {
 
-	private final Logger log;
+	protected final Logger log;
 
 	private final Book book = new Book();
 

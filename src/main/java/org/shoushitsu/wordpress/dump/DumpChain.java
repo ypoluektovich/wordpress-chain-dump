@@ -41,7 +41,7 @@ public class DumpChain {
 		}
 
 		@Override
-		public void saveUnparsedPost(final int index, final byte[] post) {
+		public void saveUnparsedPost(int index, byte[] post) {
 			String pathString = String.format("%06d.orig", index);
 			log.debug("Saving unparsed post to {}", pathString);
 			try {

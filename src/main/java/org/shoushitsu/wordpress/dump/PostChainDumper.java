@@ -109,9 +109,11 @@ public class PostChainDumper {
 				content = fetchContent(siteAndSlug, url);
 				break;
 			} catch (PostNotFoundException e) {
+				log.error(e.getMessage());
 				callback.fetchException(e);
 				return false;
 			} catch (IOException e) {
+				log.error("Error while fetching content", e);
 				if (fetchException == null) {
 					fetchException = e;
 				} else {
@@ -119,7 +121,7 @@ public class PostChainDumper {
 				}
 			}
 			if (attempt == 3) {
-				log.info("Couldn't fetch in {} attempts, aborting", attempt);
+				log.error("Couldn't fetch in {} attempts, aborting", attempt);
 				callback.fetchException(fetchException);
 				return false;
 			} else {
@@ -127,7 +129,7 @@ public class PostChainDumper {
 				try {
 					Thread.sleep(attempt * 1000);
 				} catch (InterruptedException e) {
-					log.info("Wait was interrupted!");
+					log.warn("Wait was interrupted!");
 					return false;
 				}
 			}
@@ -191,12 +193,6 @@ public class PostChainDumper {
 		}
 		log.info("Fetched {} bytes in {} ms", content.length, System.currentTimeMillis() - startTime);
 		return content;
-	}
-
-	private static class PostNotFoundException extends IOException {
-		PostNotFoundException(String url) {
-			super("couldn't find a post at location " + url);
-		}
 	}
 
 	private void cleanUpContent(byte[] content) {
