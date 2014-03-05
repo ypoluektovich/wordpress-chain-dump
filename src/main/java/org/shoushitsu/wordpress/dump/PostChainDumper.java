@@ -45,7 +45,7 @@ public class PostChainDumper {
 		NAV_LINK_MARKER_GROUP = 2;
 	}
 
-	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) throws IOException {
+	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) {
 		PostChainDumper dumper = new PostChainDumper(client, callback);
 		dumper.enqueue(firstUrl);
 		dumper.run();
@@ -82,10 +82,12 @@ public class PostChainDumper {
 		}
 	}
 
-	private void run() throws IOException {
+	private void run() {
 		String url;
 		while ((url = urlQueue.poll()) != null) {
-			processNode(url, indexByUrl.get(url));
+			if (!processNode(url, indexByUrl.get(url))) {
+				break;
+			}
 		}
 	}
 
@@ -107,9 +109,11 @@ public class PostChainDumper {
 				content = fetchContent(siteAndSlug, url);
 				break;
 			} catch (PostNotFoundException e) {
+				log.error(e.getMessage());
 				callback.fetchException(e);
 				return false;
 			} catch (IOException e) {
+				log.error("Error while fetching content", e);
 				if (fetchException == null) {
 					fetchException = e;
 				} else {
@@ -117,7 +121,7 @@ public class PostChainDumper {
 				}
 			}
 			if (attempt == 3) {
-				log.info("Couldn't fetch in {} attempts, aborting", attempt);
+				log.error("Couldn't fetch in {} attempts, aborting", attempt);
 				callback.fetchException(fetchException);
 				return false;
 			} else {
@@ -125,7 +129,7 @@ public class PostChainDumper {
 				try {
 					Thread.sleep(attempt * 1000);
 				} catch (InterruptedException e) {
-					log.info("Wait was interrupted!", e);
+					log.warn("Wait was interrupted!");
 					return false;
 				}
 			}
@@ -148,7 +152,8 @@ public class PostChainDumper {
 				try {
 					request.setURI(new URIBuilder(request.getURI()).addParameter("meta", "site").build());
 				} catch (URISyntaxException e) {
-					logImpossibleException(e);
+					log.error("Impossible!", e);
+					callback.impossible();
 					savedBookInfo = true;
 				}
 			}
@@ -188,12 +193,6 @@ public class PostChainDumper {
 		}
 		log.info("Fetched {} bytes in {} ms", content.length, System.currentTimeMillis() - startTime);
 		return content;
-	}
-
-	private static class PostNotFoundException extends IOException {
-		PostNotFoundException(String url) {
-			super("couldn't find a post at location " + url);
-		}
 	}
 
 	private void cleanUpContent(byte[] content) {
@@ -244,11 +243,6 @@ public class PostChainDumper {
 				callback.chapterLine(line);
 			}
 		}
-	}
-
-	private void logImpossibleException(Exception e) {
-		log.error("Impossible!", e);
-		callback.impossible();
 	}
 
 }

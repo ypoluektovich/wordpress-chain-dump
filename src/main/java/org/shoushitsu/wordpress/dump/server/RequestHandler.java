@@ -1,5 +1,6 @@
 package org.shoushitsu.wordpress.dump.server;
 
+import nl.siegmann.epublib.domain.Book;
 import org.json.JSONObject;
 import org.simpleframework.http.Path;
 import org.simpleframework.http.Request;
@@ -16,7 +17,8 @@ import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 class RequestHandler implements Container {
 
@@ -42,10 +44,22 @@ class RequestHandler implements Container {
 
 	private final ConcurrentMap<String, DumpTask> taskByUrl = new ConcurrentHashMap<>();
 
-	private final ExecutorService executor;
+	private final FileCache fileCache;
 
-	RequestHandler(ExecutorService executor) {
+	private final TaskCleanupQueue<String> taskCleanupQueue = new TaskCleanupQueue<String>() {
+		@Override
+		protected void purge(String item) {
+			taskByUrl.remove(item);
+		}
+	};
+
+	private final ScheduledExecutorService executor;
+
+	RequestHandler(java.nio.file.Path cacheRoot, ScheduledExecutorService executor) {
+		fileCache = new FileCache(cacheRoot);
 		this.executor = executor;
+
+		executor.scheduleWithFixedDelay(taskCleanupQueue, 0, 1, TimeUnit.SECONDS);
 	}
 
 	void awaitShutdown() throws InterruptedException {
@@ -105,7 +119,14 @@ class RequestHandler implements Container {
 	private class MyDumpTaskCallback implements DumpTask.Callback {
 		@Override
 		public void failed(DumpTask task) {
-			taskByUrl.remove(task.getUrl(), task);
+			taskCleanupQueue.enqueue(task.getUrl(), 60 * 1000);
+		}
+
+		@Override
+		public boolean done(DumpTask task, Book book, Logger log) {
+			boolean saved = fileCache.save(task.getUrl(), book, log);
+			taskCleanupQueue.enqueue(task.getUrl(), 60 * 60 * 1000);
+			return saved;
 		}
 	}
 
