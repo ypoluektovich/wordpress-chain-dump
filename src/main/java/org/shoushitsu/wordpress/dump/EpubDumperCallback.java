@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import java.io.IOException;
 import java.io.StringReader;
 
-abstract class EpubDumperCallback implements PostChainDumperCallback {
+public abstract class EpubDumperCallback implements PostChainDumperCallback {
 
 	protected final Logger log;
 
