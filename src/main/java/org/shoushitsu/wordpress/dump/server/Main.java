@@ -51,11 +51,15 @@ public class Main {
 		}
 
 		ScheduledExecutorService executor = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
-		RequestHandler handler = new RequestHandler(cacheRoot, executor);
+
+		RequestDispatchingHandler dispatchingHandler = new RequestDispatchingHandler();
+		StopRequestHandler stopHandler = new StopRequestHandler();
+		dispatchingHandler.setHandler("/stop", stopHandler);
+		dispatchingHandler.setHandler("/dump", new DumpRequestHandler(cacheRoot, executor));
 
 		Connection connection;
 		try {
-			ContainerServer server = new ContainerServer(handler);
+			ContainerServer server = new ContainerServer(dispatchingHandler);
 			connection = new SocketConnection(server);
 			connection.connect(new InetSocketAddress(port));
 		} catch (IOException e) {
@@ -66,7 +70,7 @@ public class Main {
 		log.info("Started the server on port {}", port);
 
 		try {
-			handler.awaitShutdown();
+			stopHandler.awaitShutdown();
 		} catch (InterruptedException e) {
 			log.error("Interrupted while waiting for shutdown", e);
 			return 0;
