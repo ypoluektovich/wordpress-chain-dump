@@ -45,7 +45,7 @@ public class PostChainDumper {
 		NAV_LINK_MARKER_GROUP = 2;
 	}
 
-	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) throws IOException {
+	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) {
 		PostChainDumper dumper = new PostChainDumper(client, callback);
 		dumper.enqueue(firstUrl);
 		dumper.run();
@@ -82,7 +82,7 @@ public class PostChainDumper {
 		}
 	}
 
-	private void run() throws IOException {
+	private void run() {
 		String url;
 		while ((url = urlQueue.poll()) != null) {
 			if (!processNode(url, indexByUrl.get(url))) {
