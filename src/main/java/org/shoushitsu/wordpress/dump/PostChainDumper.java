@@ -45,7 +45,7 @@ public class PostChainDumper {
 		NAV_LINK_MARKER_GROUP = 2;
 	}
 
-	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) {
+	public static void dump(CloseableHttpClient client, String firstUrl, PostChainDumperCallback callback) throws InterruptedException {
 		PostChainDumper dumper = new PostChainDumper(client, callback);
 		dumper.enqueue(firstUrl);
 		dumper.run();
@@ -82,16 +82,19 @@ public class PostChainDumper {
 		}
 	}
 
-	private void run() {
+	private void run() throws InterruptedException {
 		String url;
 		while ((url = urlQueue.poll()) != null) {
 			if (!processNode(url, indexByUrl.get(url))) {
 				break;
 			}
+			if (Thread.interrupted()) {
+				throw new InterruptedException("Detected an interrupt between nodes");
+			}
 		}
 	}
 
-	private boolean processNode(String url, int index) {
+	private boolean processNode(String url, int index) throws InterruptedException {
 		log.info("Processing url with index {}: {}", index, url);
 		callback.startChapter(index);
 
@@ -129,8 +132,7 @@ public class PostChainDumper {
 				try {
 					Thread.sleep(attempt * 1000);
 				} catch (InterruptedException e) {
-					log.warn("Wait was interrupted!");
-					return false;
+					throw new InterruptedException("Interrupted while waiting between fetch attempts");
 				}
 			}
 		}

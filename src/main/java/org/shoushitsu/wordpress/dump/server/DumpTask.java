@@ -60,6 +60,12 @@ class DumpTask implements Runnable {
 			PostChainDumper.dump(client, url, dumperCallback);
 		} catch (IOException e) {
 			log.error("Error while closing HTTP client");
+		} catch (InterruptedException e) {
+			log.warn(e.getMessage());
+			progress = FAILED;
+		}
+		if (progress == FAILED) {
+			return;
 		}
 
 		log.info("Reporting success");
