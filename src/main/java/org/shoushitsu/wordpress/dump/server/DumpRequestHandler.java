@@ -1,11 +1,15 @@
 package org.shoushitsu.wordpress.dump.server;
 
+import io.otonashi.cache.ContentSink;
+import io.otonashi.cache.ContentStorage;
 import nl.siegmann.epublib.domain.Book;
+import nl.siegmann.epublib.epub.EpubWriter;
 import org.json.JSONObject;
 import org.simpleframework.http.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -24,24 +28,30 @@ class DumpRequestHandler extends AJsonHandler {
 
 	private final ConcurrentMap<String, DumpTask> taskByUrl = new ConcurrentHashMap<>();
 
-	private final FileCache fileCache;
+	private final ContentStorage bookCache;
 
 	private final TaskCleanupQueue<String> taskCleanupQueue = new TaskCleanupQueue<String>() {
 		@Override
 		protected void purge(String item) {
 			taskByUrl.remove(item);
+            bookCache.expire(item);
 		}
 	};
 
 	private final ScheduledExecutorService executor;
 
-	DumpRequestHandler(java.nio.file.Path cacheRoot, ScheduledExecutorService executor) {
+	DumpRequestHandler(ContentStorage bookCache, ScheduledExecutorService executor) {
 		super(LoggerFactory.getLogger(DumpRequestHandler.class));
-		fileCache = new FileCache(cacheRoot);
+		this.bookCache = bookCache;
 		this.executor = executor;
 
 		executor.scheduleWithFixedDelay(taskCleanupQueue, 0, 1, TimeUnit.SECONDS);
 	}
+
+    String getBookTitle(String firstChapterUrl) {
+        DumpTask dumpTask = taskByUrl.get(firstChapterUrl);
+        return dumpTask == null ? null : dumpTask.getBookTitle();
+    }
 
 	@Override
 	protected JSONObject handle(Request req) {
@@ -76,9 +86,16 @@ class DumpRequestHandler extends AJsonHandler {
 
 		@Override
 		public boolean done(DumpTask task, Book book, Logger log) {
-			boolean saved = fileCache.save(task.getUrl(), book, log);
-			taskCleanupQueue.enqueue(task.getUrl(), 60 * 60 * 1000);
-			return saved;
+            try (ContentSink sink = bookCache.getSink(task.getUrl())) {
+                log.info("Writing book file");
+                new EpubWriter().write(book, sink.getOutputStream());
+                return true;
+            } catch (IOException e) {
+                log.error("Error while saving the book", e);
+                return false;
+            } finally {
+                taskCleanupQueue.enqueue(task.getUrl(), 60 * 60 * 1000);
+            }
 		}
 	}
 

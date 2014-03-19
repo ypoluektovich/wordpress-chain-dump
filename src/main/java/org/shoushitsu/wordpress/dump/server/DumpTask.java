@@ -38,6 +38,8 @@ class DumpTask implements Runnable {
 
 	private final Callback callback;
 
+    private String bookTitle;
+
 	private volatile int progress = PENDING;
 
 	DumpTask(String url, Callback callback) {
@@ -49,7 +51,11 @@ class DumpTask implements Runnable {
 		return url;
 	}
 
-	@Override
+    String getBookTitle() {
+        return bookTitle;
+    }
+
+    @Override
 	public void run() {
 		Logger log = LoggerFactory.getLogger(DumpTask.class.getName() + '.' + INDEX_SOURCE.incrementAndGet());
 		log.info("Starting processing with URL {}", url);
@@ -113,8 +119,13 @@ class DumpTask implements Runnable {
 			// do nothing
 		}
 
-		@Override
-		public void onEndChapter(int index) {
+        @Override
+        protected void onBookTitle(String title) {
+            DumpTask.this.bookTitle = title;
+        }
+
+        @Override
+		protected void onEndChapter(int index) {
 			DumpTask.this.progress = index;
 		}
 

@@ -1,5 +1,8 @@
 package org.shoushitsu.wordpress.dump.server;
 
+import io.otonashi.cache.StorageCallback;
+import io.otonashi.cache.file.BadStorageRootException;
+import io.otonashi.cache.file.FileStorage;
 import org.simpleframework.http.core.ContainerServer;
 import org.simpleframework.transport.connect.Connection;
 import org.simpleframework.transport.connect.SocketConnection;
@@ -8,7 +11,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -45,19 +47,33 @@ public class Main {
 			System.err.println("Invalid cache dir: " + args[1]);
 			return 1;
 		}
-		if (!Files.isWritable(cacheRoot)) {
-			System.err.println("Cache dir is not writable!");
-			return 1;
-		}
+
+        FileStorage bookCache;
+        try {
+            bookCache = new FileStorage(
+                    cacheRoot,
+                    new StorageCallback() {
+                        @Override
+                        public void releaseFailed(Throwable throwable) {
+                            log.error("Failed to release cache entry, resource leak possible!", throwable);
+                        }
+                    }
+            );
+        } catch (BadStorageRootException e) {
+            log.error("Failed to initialize book storage", e);
+            return 1;
+        }
 
 		ScheduledExecutorService executor = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
 
 		RequestDispatchingHandler dispatchingHandler = new RequestDispatchingHandler();
 		StopRequestHandler stopHandler = new StopRequestHandler();
-		dispatchingHandler.setHandler("/stop", stopHandler);
-		dispatchingHandler.setHandler("/dump", new DumpRequestHandler(cacheRoot, executor));
+        DumpRequestHandler dumpHandler = new DumpRequestHandler(bookCache, executor);
+        dispatchingHandler.setHandler("/stop", stopHandler);
+        dispatchingHandler.setHandler("/dump", dumpHandler);
+        dispatchingHandler.setHandler("/get", new GetRequestHandler(dumpHandler, bookCache));
 
-		Connection connection;
+        Connection connection;
 		try {
 			ContainerServer server = new ContainerServer(dispatchingHandler);
 			connection = new SocketConnection(server);

@@ -52,9 +52,14 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 	@Override
 	public final void bookTitle(String title) {
 		book.getMetadata().addTitle(title);
-	}
+        onBookTitle(title);
+    }
 
-	@Override
+    protected void onBookTitle(String title) {
+        // inheritors may override
+    }
+
+    @Override
 	public final void chapterTitle(String title) {
 		writeln("<head>");
 		writeln("<title>" + title + "</title>");
@@ -97,7 +102,7 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 		return true;
 	}
 
-	public void onEndChapter(int index) {
+	protected void onEndChapter(int index) {
 		// inheritors may override
 	}
 
