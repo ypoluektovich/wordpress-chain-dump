@@ -50,6 +50,17 @@ public class DumpChain {
 				log.error("Error while saving unparsed data", e);
 			}
 		}
+
+		@Override
+		public boolean impossible() {
+			return false;
+		}
+
+		@Override
+		public boolean badUrl(int index, String url) {
+			return false;
+		}
+
 	}
 
 }

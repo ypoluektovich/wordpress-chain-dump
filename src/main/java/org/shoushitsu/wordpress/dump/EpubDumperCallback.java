@@ -22,7 +22,7 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 		this.log = log;
 	}
 
-	final Book getBook() {
+	public final Book getBook() {
 		return book;
 	}
 
@@ -37,14 +37,10 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 	}
 
 	@Override
-	public boolean impossible() {
-		return false;
-	}
+	public abstract boolean impossible();
 
 	@Override
-	public boolean badUrl(int index, String url) {
-		return false;
-	}
+	public abstract boolean badUrl(int index, String url);
 
 	@Override
 	public final void startChapter(int index) {
@@ -56,9 +52,14 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 	@Override
 	public final void bookTitle(String title) {
 		book.getMetadata().addTitle(title);
-	}
+        onBookTitle(title);
+    }
 
-	@Override
+    protected void onBookTitle(String title) {
+        // inheritors may override
+    }
+
+    @Override
 	public final void chapterTitle(String title) {
 		writeln("<head>");
 		writeln("<title>" + title + "</title>");
@@ -97,7 +98,12 @@ public abstract class EpubDumperCallback implements PostChainDumperCallback {
 		} finally {
 			chapter.setLength(0);
 		}
+		onEndChapter(index);
 		return true;
+	}
+
+	protected void onEndChapter(int index) {
+		// inheritors may override
 	}
 
 }
