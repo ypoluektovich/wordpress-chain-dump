@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+{%- if myakotka['status'] == 'pending' || myakotka['status'] == 'working' %}
+    <meta http-equiv="refresh" content="10">
+{%- endif %}
+    <title>Wordpress chain dumper</title>
+</head>
+<body>
+<h1>Wordpress chain dumper</h1>
+<p>First chapter URL: {{ shkurka }}</p>
+<p>Your request status: <strong>{{ myakotka['status'] }}</strong></p>
+{% if myakotka['status'] == 'working' %}
+<p>Progress: <strong>{{ myakotka['progress'] }} chapter{% if myakotka['progress'] != 1 %}s{% endif %}</strong></p>
+<p>The page will be automatically reloaded every 10 seconds until the server reports that the book is ready for download.</p>
+{% elif myakotka['status'] == 'ready' %}
+<p>Your book is ready! Download it by following <a href="get?url={{ shkurka|url_encode }}">this link</a>.</p>
+{% elif myakotka['status'] == 'failed' %}
+<p>There was an error while retrieving the book content. You can try again in a minute in case it's a transient problem.</p>
+{% endif %}
+</body>
+</html>

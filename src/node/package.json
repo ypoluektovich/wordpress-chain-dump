@@ -1,0 +1,9 @@
+{
+    "name": "wpcd-nojs",
+    "version": "1.0.0",
+    "private": true,
+    "dependencies": {
+        "express": "3.5.x",
+        "swig": "1.3.x"
+    }
+}

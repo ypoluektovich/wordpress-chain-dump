@@ -25,3 +25,6 @@ dependencies {
 
     runtime 'org.slf4j:slf4j-simple:1.7.6'
 }
+
+apply plugin: 'application'
+mainClassName = 'org.shoushitsu.wordpress.dump.server.Main'
